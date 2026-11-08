@@ -1,7 +1,10 @@
+from functools import lru_cache
+from io import BytesIO
 from pathlib import Path
 
 import numpy as np
 import tensorflow as tf
+from PIL import Image, ImageOps, UnidentifiedImageError
 
 
 # ============================================================
@@ -19,7 +22,7 @@ CLASS_NAMES = [
     "glacier",
     "mountain",
     "sea",
-    "street"
+    "street",
 ]
 
 SUPPORTED_EXTENSIONS = {
@@ -28,131 +31,110 @@ SUPPORTED_EXTENSIONS = {
     ".png",
     ".bmp",
     ".jfif",
-    ".webp"
+    ".webp",
 }
 
 
 # ============================================================
-# Load model
+# Model loading
 # ============================================================
 
-print("\nLoading trained model...")
+@lru_cache(maxsize=1)
+def load_classifier_model():
+    """Load the trained model once and reuse it for later predictions."""
+    if not MODEL_PATH.is_file():
+        raise FileNotFoundError(
+            f"Trained model not found: {MODEL_PATH}. "
+            "Make sure Git LFS is installed and run 'git lfs pull'."
+        )
 
-model = tf.keras.models.load_model(
-    MODEL_PATH
-)
+    model = tf.keras.models.load_model(MODEL_PATH)
 
-print("Model loaded successfully.")
+    output_units = model.output_shape[-1]
+    if output_units != len(CLASS_NAMES):
+        raise ValueError(
+            f"Model has {output_units} output classes, "
+            f"but {len(CLASS_NAMES)} class names are configured."
+        )
+
+    return model
 
 
 # ============================================================
-# Prediction function
+# Image preparation
 # ============================================================
 
-def predict_image(image_path):
+def _open_image(image_input):
+    """Open an image supplied as bytes, a path, or a file-like object."""
+    if isinstance(image_input, (bytes, bytearray, memoryview)):
+        source = BytesIO(image_input)
+    else:
+        source = image_input
+
+    try:
+        with Image.open(source) as image:
+            image = ImageOps.exif_transpose(image)
+            return image.convert("RGB").resize(
+                (IMAGE_SIZE[1], IMAGE_SIZE[0]),
+                Image.Resampling.LANCZOS,
+            )
+    except (UnidentifiedImageError, OSError, ValueError) as error:
+        raise ValueError(
+            "The uploaded file is not a valid, readable image."
+        ) from error
+
+
+# ============================================================
+# Prediction
+# ============================================================
+
+def predict_image(image_input):
     """
     Classify an image using the trained CNN.
 
-    Returns:
-        list of dictionaries containing
-        class names and confidence scores.
+    image_input may be image bytes, a file-like object, or a filesystem path.
+    Returns the three highest-scoring classes and their model scores.
     """
+    if isinstance(image_input, (str, Path)):
+        image_path = Path(image_input)
 
-    image_path = Path(image_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image not found: {image_path}")
 
-    # --------------------------------------------------------
-    # Check file exists
-    # --------------------------------------------------------
-
-    if not image_path.exists():
-
-        raise FileNotFoundError(
-            f"Image not found: {image_path}"
-        )
-
-    # --------------------------------------------------------
-    # Check file extension
-    # --------------------------------------------------------
-
-    if image_path.suffix.lower() not in (
-        SUPPORTED_EXTENSIONS
-    ):
-
-        supported = ", ".join(
-            sorted(SUPPORTED_EXTENSIONS)
-        )
-
-        raise ValueError(
-            f"Unsupported image format: "
-            f"{image_path.suffix}\n"
-            f"Supported formats: {supported}"
-        )
-
-    # --------------------------------------------------------
-    # Load image
-    # --------------------------------------------------------
-
-    try:
-
-        image = tf.keras.utils.load_img(
-            image_path,
-            target_size=IMAGE_SIZE
-        )
-
-    except Exception as error:
-
-        raise ValueError(
-            f"Could not read the image. "
-            f"It may be corrupted or invalid.\n"
-            f"Details: {error}"
-        )
-
-    # --------------------------------------------------------
-    # Convert image to array
-    # --------------------------------------------------------
-
-    image_array = tf.keras.utils.img_to_array(
-        image
-    )
-
-    # --------------------------------------------------------
-    # Add batch dimension
-    # --------------------------------------------------------
-
-    image_array = np.expand_dims(
-        image_array,
-        axis=0
-    )
-
-    # --------------------------------------------------------
-    # Generate predictions
-    # --------------------------------------------------------
-
-    predictions = model.predict(
-        image_array,
-        verbose=0
-    )[0]
-
-    # --------------------------------------------------------
-    # Find top 3 predictions
-    # --------------------------------------------------------
-
-    top_indices = np.argsort(
-        predictions
-    )[::-1][:3]
-
-    results = []
-
-    for index in top_indices:
-
-        results.append({
-            "class": CLASS_NAMES[index],
-            "confidence": float(
-                predictions[index]
+        if image_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            supported = ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            raise ValueError(
+                f"Unsupported image format: {image_path.suffix}. "
+                f"Supported formats: {supported}"
             )
-        })
 
-    return results
+    image = _open_image(image_input)
+    image_array = tf.keras.utils.img_to_array(image)
+    image_array = np.expand_dims(image_array, axis=0)
+
+    model = load_classifier_model()
+    predictions = np.asarray(
+        model.predict(image_array, verbose=0)[0],
+        dtype=np.float64,
+    )
+
+    if predictions.shape != (len(CLASS_NAMES),):
+        raise ValueError(
+            "The model returned an unexpected prediction shape."
+        )
+
+    if not np.all(np.isfinite(predictions)):
+        raise ValueError("The model returned invalid prediction scores.")
+
+    top_indices = np.argsort(predictions)[::-1][:3]
+
+    return [
+        {
+            "class": CLASS_NAMES[index],
+            "confidence": float(predictions[index]),
+        }
+        for index in top_indices
+    ]
 
 
 # ============================================================
@@ -160,46 +142,21 @@ def predict_image(image_path):
 # ============================================================
 
 if __name__ == "__main__":
-
-    print("\n" + "=" * 70)
+    print("=" * 70)
     print("CNN IMAGE CLASSIFIER")
     print("=" * 70)
 
-    image_path = input(
-        "\nEnter the path to an image: "
-    ).strip()
+    image_path = input("Enter the path to an image: ").strip().strip('"')
 
     try:
+        results = predict_image(image_path)
 
-        results = predict_image(
-            image_path
-        )
-
-        print("\n" + "=" * 70)
-        print("PREDICTION RESULTS")
-        print("=" * 70)
-
-        for position, result in enumerate(
-            results,
-            start=1
-        ):
-
+        print("\nPREDICTION RESULTS")
+        for position, result in enumerate(results, start=1):
             print(
-                f"\n{position}. "
-                f"{result['class']}"
-            )
-
-            print(
-                f"   Confidence: "
+                f"{position}. {result['class'].title()}: "
                 f"{result['confidence']:.2%}"
             )
 
     except Exception as error:
-
-        print("\n" + "=" * 70)
-        print("PREDICTION FAILED")
-        print("=" * 70)
-
-        print(
-            f"\n{error}"
-        )
+        print(f"\nPREDICTION FAILED: {error}")

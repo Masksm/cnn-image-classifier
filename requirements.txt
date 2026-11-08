@@ -1,6 +1,7 @@
 # Core application and model runtime
 tensorflow==2.21.0
 streamlit==1.61.1
+numpy>=1.26
 Pillow>=10.0,<13.0
 
 # Training, evaluation and result visualization

@@ -1,0 +1,10 @@
+# Core application and model runtime
+tensorflow==2.21.0
+streamlit==1.61.1
+Pillow>=10.0,<13.0
+
+# Training, evaluation and result visualization
+scikit-learn>=1.4
+pandas>=2.1
+matplotlib>=3.8
+seaborn>=0.13

@@ -1,5 +1,7 @@
 # CNN Image Classification System
 
+> **Full project documentation:** See [PROJECT_DOCUMENTATION.md](PROJECT_DOCUMENTATION.md) for the project background, objectives, methodology, architecture, implementation, testing, results, deployment and limitations.
+
 A TensorFlow/Keras image-classification project that predicts one of six scene categories: **buildings, forest, glacier, mountain, sea, and street**. The project compares custom CNN models with transfer learning and fine-tuning using InceptionV3, then exposes the best model through a Streamlit application.
 
 ## Results at a glance
